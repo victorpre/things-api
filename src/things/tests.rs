@@ -18,7 +18,7 @@ async fn lists_tasks_with_related_metadata() {
 
     let tasks = repository.list_tasks(TaskFilter::default()).await.unwrap();
 
-    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks.len(), 8);
 
     let inbox = tasks.iter().find(|task| task.uuid == "task-open").unwrap();
     assert_eq!(inbox.title.as_deref(), Some("Open task"));
@@ -40,7 +40,64 @@ async fn lists_tasks_with_related_metadata() {
         .find(|task| task.uuid == "task-completed")
         .unwrap();
     assert_eq!(completed.status, TaskStatus::Completed);
-    assert_eq!(completed.status_code, 2);
+    assert_eq!(completed.status_code, 3);
+}
+
+#[tokio::test]
+async fn filters_to_tasks_scheduled_for_today() {
+    let fixture = FixtureDb::new().await;
+    let repository = ThingsRepository::new(fixture.read_pool().await);
+
+    let tasks = repository
+        .list_tasks(TaskFilter {
+            today_only: true,
+            ..TaskFilter::default()
+        })
+        .await
+        .unwrap();
+
+    let ids = task_ids(&tasks);
+    assert_eq!(ids, vec!["task-open", "task-someday-overdue", "task-due"]);
+}
+
+#[tokio::test]
+async fn today_filter_ignores_status_filter() {
+    let fixture = FixtureDb::new().await;
+    let repository = ThingsRepository::new(fixture.read_pool().await);
+
+    let tasks = repository
+        .list_tasks(TaskFilter {
+            status: Some(3),
+            today_only: true,
+            ..TaskFilter::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        task_ids(&tasks),
+        vec!["task-open", "task-someday-overdue", "task-due"]
+    );
+}
+
+#[tokio::test]
+async fn today_filter_excludes_trashed_even_when_requested() {
+    let fixture = FixtureDb::new().await;
+    let repository = ThingsRepository::new(fixture.read_pool().await);
+
+    let tasks = repository
+        .list_tasks(TaskFilter {
+            today_only: true,
+            include_trashed: true,
+            ..TaskFilter::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        task_ids(&tasks),
+        vec!["task-open", "task-someday-overdue", "task-due"]
+    );
 }
 
 #[tokio::test]
@@ -76,17 +133,16 @@ async fn filters_by_status_and_trashed_flag() {
 
     let completed = repository
         .list_tasks(TaskFilter {
-            status: Some(2),
+            status: Some(3),
             trashed: None,
-            include_trashed: false,
+            ..TaskFilter::default()
         })
         .await
         .unwrap();
     let trashed = repository
         .list_tasks(TaskFilter {
-            status: None,
             trashed: Some(true),
-            include_trashed: false,
+            ..TaskFilter::default()
         })
         .await
         .unwrap();
@@ -157,11 +213,13 @@ async fn create_schema(pool: &SqlitePool) {
             startDate INTEGER,
             reminderTime INTEGER,
             deadline INTEGER,
+            deadlineSuppressionDate INTEGER,
             "index" INTEGER,
             todayIndex INTEGER,
             area TEXT,
             project TEXT,
-            heading TEXT
+            heading TEXT,
+            rt1_recurrenceRule BLOB
         );
 
         CREATE TABLE TMArea (
@@ -211,10 +269,22 @@ async fn seed_data(pool: &SqlitePool) {
             'task-open', 1.5, 2.5, 0, 0, 0, 'Open task', 'Notes', 1, 12345,
             2051, 23456, 2, 1, 'area-a', 'project-a', 'heading-a'
         );
-        INSERT INTO TMTask (uuid, type, status, trashed, title, "index")
-            VALUES ('task-completed', 0, 2, 0, 'Completed task', 3);
-        INSERT INTO TMTask (uuid, type, status, trashed, title, "index")
-            VALUES ('task-trashed', 0, 0, 1, 'Trashed task', 4);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, "index")
+            VALUES ('task-later', 0, 0, 0, 'Later task', 1, 999999999, 3);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, "index")
+            VALUES ('task-someday-overdue', 0, 0, 0, 'Someday overdue task', 2, 12345, 4);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, deadline, "index")
+            VALUES ('task-due', 0, 0, 0, 'Due task', 12345, 5);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, deadline, deadlineSuppressionDate, "index")
+            VALUES ('task-suppressed-due', 0, 0, 0, 'Suppressed due task', 12345, 12345, 6);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, rt1_recurrenceRule, "index")
+            VALUES ('task-repeating', 0, 0, 0, 'Repeating task', 1, 12345, X'01', 7);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, "index", todayIndex)
+            VALUES ('task-completed', 0, 3, 0, 'Completed task', 1, 12345, 8, 2);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, "index", todayIndex)
+            VALUES ('task-trashed', 0, 0, 1, 'Trashed task', 1, 12345, 9, 3);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, "index", todayIndex)
+            VALUES ('task-today-index-only', 0, 0, 0, 'Today index only task', 10, 4);
 
         INSERT INTO TMTag (uuid, title, "index")
             VALUES ('tag-home', 'Home', 1), ('tag-next', 'Next', 2);
@@ -229,6 +299,10 @@ async fn seed_data(pool: &SqlitePool) {
     )
     .await
     .unwrap();
+}
+
+fn task_ids(tasks: &[ThingsTask]) -> Vec<&str> {
+    tasks.iter().map(|task| task.uuid.as_str()).collect()
 }
 
 fn unique_temp_path(name: &str) -> PathBuf {

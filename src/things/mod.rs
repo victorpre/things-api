@@ -27,8 +27,14 @@ impl ThingsRepository {
     }
 
     async fn fetch_task_rows(&self, filter: TaskFilter) -> Result<Vec<TaskRow>, sqlx::Error> {
-        let mut query = QueryBuilder::<Sqlite>::new(
+        let mut query = QueryBuilder::<Sqlite>::new(if filter.today_only {
             r#"
+            WITH today(code) AS (
+                SELECT
+                    (CAST(strftime('%Y', 'now', 'localtime') AS INTEGER) << 16)
+                    | (CAST(strftime('%m', 'now', 'localtime') AS INTEGER) << 12)
+                    | (CAST(strftime('%d', 'now', 'localtime') AS INTEGER) << 7)
+            )
             SELECT
                 task.uuid,
                 task.title,
@@ -41,8 +47,8 @@ impl ThingsRepository {
                 task.startDate AS start_date,
                 task.reminderTime AS reminder_time,
                 task.deadline,
-                task.project AS project_id,
-                project.title AS project_title,
+                COALESCE(task.project, heading.project) AS project_id,
+                COALESCE(project.title, heading_project.title) AS project_title,
                 task.area AS area_id,
                 area.title AS area_title,
                 task.heading AS heading_id,
@@ -56,6 +62,8 @@ impl ThingsRepository {
                 ON task.area = area.uuid
             LEFT JOIN TMTask AS heading
                 ON task.heading = heading.uuid AND heading.type = 2
+            LEFT JOIN TMTask AS heading_project
+                ON heading.project = heading_project.uuid AND heading_project.type = 1
             LEFT JOIN (
                 SELECT
                     task,
@@ -65,24 +73,92 @@ impl ThingsRepository {
                 GROUP BY task
             ) AS checklist
                 ON checklist.task = task.uuid
+            CROSS JOIN today
+            "#
+        } else {
+            r#"
+            SELECT
+                task.uuid,
+                task.title,
+                task.notes,
+                task.status,
+                task.trashed,
+                task.creationDate AS creation_date,
+                task.userModificationDate AS user_modification_date,
+                task.start,
+                task.startDate AS start_date,
+                task.reminderTime AS reminder_time,
+                task.deadline,
+                COALESCE(task.project, heading.project) AS project_id,
+                COALESCE(project.title, heading_project.title) AS project_title,
+                task.area AS area_id,
+                area.title AS area_title,
+                task.heading AS heading_id,
+                heading.title AS heading_title,
+                COALESCE(checklist.checklist_items_count, 0) AS checklist_items_count,
+                COALESCE(checklist.open_checklist_items_count, 0) AS open_checklist_items_count
+            FROM TMTask AS task
+            LEFT JOIN TMTask AS project
+                ON task.project = project.uuid AND project.type = 1
+            LEFT JOIN TMArea AS area
+                ON task.area = area.uuid
+            LEFT JOIN TMTask AS heading
+                ON task.heading = heading.uuid AND heading.type = 2
+            LEFT JOIN TMTask AS heading_project
+                ON heading.project = heading_project.uuid AND heading_project.type = 1
+            LEFT JOIN (
+                SELECT
+                    task,
+                    COUNT(*) AS checklist_items_count,
+                    SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) AS open_checklist_items_count
+                FROM TMChecklistItem
+                GROUP BY task
+            ) AS checklist
+                ON checklist.task = task.uuid
+            "#
+        });
+
+        query.push(
+            r#"
             WHERE task.type = 0
             "#,
         );
 
-        if let Some(status) = filter.status {
-            query.push(" AND task.status = ");
-            query.push_bind(status);
-        }
+        if filter.today_only {
+            query.push(
+                r#"
+                AND task.status = 0
+                AND task.trashed = 0
+                AND task.rt1_recurrenceRule IS NULL
+                AND COALESCE(project.trashed, heading_project.trashed, 0) = 0
+                AND (
+                    (task.start = 1 AND task.startDate IS NOT NULL AND task.startDate <= today.code)
+                    OR (task.start = 2 AND task.startDate IS NOT NULL AND task.startDate <= today.code)
+                    OR (
+                        task.startDate IS NULL
+                        AND task.deadline IS NOT NULL
+                        AND task.deadline <= today.code
+                        AND task.deadlineSuppressionDate IS NULL
+                    )
+                )
+                "#,
+            );
+        } else {
+            if let Some(status) = filter.status {
+                query.push(" AND task.status = ");
+                query.push_bind(status);
+            }
 
-        match filter.trashed {
-            Some(trashed) => {
-                query.push(" AND task.trashed = ");
-                query.push_bind(i64::from(trashed));
+            match filter.trashed {
+                Some(trashed) => {
+                    query.push(" AND task.trashed = ");
+                    query.push_bind(i64::from(trashed));
+                }
+                None if !filter.include_trashed => {
+                    query.push(" AND task.trashed = 0");
+                }
+                None => {}
             }
-            None if !filter.include_trashed => {
-                query.push(" AND task.trashed = 0");
-            }
-            None => {}
         }
 
         query.push(
@@ -145,6 +221,7 @@ pub struct TaskFilter {
     pub status: Option<i64>,
     pub trashed: Option<bool>,
     pub include_trashed: bool,
+    pub today_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -185,8 +262,8 @@ impl TaskStatus {
     fn from_code(code: i64) -> Self {
         match code {
             0 => Self::Open,
-            2 => Self::Completed,
-            3 => Self::Canceled,
+            2 => Self::Canceled,
+            3 => Self::Completed,
             _ => Self::Unknown,
         }
     }

@@ -13,7 +13,9 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/tasks", get(list_tasks))
+    Router::new()
+        .route("/tasks", get(list_tasks))
+        .route("/tasks/today", get(list_today_tasks))
 }
 
 async fn list_tasks(
@@ -21,6 +23,16 @@ async fn list_tasks(
     Query(query): Query<ListTasksQuery>,
 ) -> Result<Json<TasksResponse>, ApiError> {
     let filter = query.into_filter()?;
+    let tasks = state.repository.list_tasks(filter).await?;
+
+    Ok(Json(TasksResponse { tasks }))
+}
+
+async fn list_today_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<ListTasksQuery>,
+) -> Result<Json<TasksResponse>, ApiError> {
+    let filter = query.into_filter_for_today()?;
     let tasks = state.repository.list_tasks(filter).await?;
 
     Ok(Json(TasksResponse { tasks }))
@@ -42,15 +54,26 @@ impl ListTasksQuery {
                 .transpose()?,
             trashed: self.trashed,
             include_trashed: self.include_trashed.unwrap_or(false),
+            today_only: false,
         })
+    }
+
+    fn into_filter_for_today(self) -> Result<TaskFilter, ApiError> {
+        let mut filter = self.into_filter()?;
+        filter.status = None;
+        filter.trashed = None;
+        filter.include_trashed = false;
+        filter.today_only = true;
+
+        Ok(filter)
     }
 }
 
 fn parse_status(status: &str) -> Result<i64, ApiError> {
     match status {
         "open" => Ok(0),
-        "completed" => Ok(2),
-        "canceled" | "cancelled" => Ok(3),
+        "completed" => Ok(3),
+        "canceled" | "cancelled" => Ok(2),
         _ => status.parse::<i64>().map_err(|_| {
             ApiError::bad_request(
                 "status must be one of open, completed, canceled, or a raw Things status code",
