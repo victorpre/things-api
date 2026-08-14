@@ -34,6 +34,7 @@ The server listens on `127.0.0.1:3000`.
 ```sh
 curl http://127.0.0.1:3000/health
 curl http://127.0.0.1:3000/tasks
+curl http://127.0.0.1:3000/tasks/today
 ```
 
 `GET /tasks` supports these optional query parameters:
@@ -42,11 +43,14 @@ curl http://127.0.0.1:3000/tasks
 - `trashed`: `true` or `false`
 - `include_trashed`: `true` or `false`
 
+`GET /tasks/today` mirrors Things' Today list query: open, untrashed todos scheduled for today or earlier, including due-date-only tasks due today or earlier.
+
 Examples:
 
 ```sh
 curl "http://127.0.0.1:3000/tasks?status=open"
 curl "http://127.0.0.1:3000/tasks?include_trashed=true"
+curl "http://127.0.0.1:3000/tasks/today"
 ```
 
 ## Development
