@@ -1,7 +1,10 @@
 use axum::Router;
 
-mod health;
+use crate::app::AppState;
 
-pub fn router() -> Router {
-    Router::new().merge(health::router())
+mod health;
+mod tasks;
+
+pub fn router() -> Router<AppState> {
+    Router::new().merge(health::router()).merge(tasks::router())
 }
