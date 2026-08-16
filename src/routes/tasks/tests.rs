@@ -1,7 +1,21 @@
 use super::*;
-use crate::things::ThingsRepository;
-use axum::extract::Query;
+use crate::{
+    audio::{AudioUpload, WhisperError, WhisperTranscriber},
+    things::ThingsRepository,
+    things_url::{ThingsAddError, ThingsTaskCreator},
+};
+use axum::{
+    body::{Body, to_bytes},
+    extract::Query,
+    http::{Request, StatusCode, header},
+};
 use sqlx::{Executor, SqlitePool};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
+use tower::ServiceExt;
 
 #[test]
 fn parses_named_status_filters() {
@@ -100,6 +114,106 @@ async fn list_today_tasks_handler_returns_only_today_tasks() {
     assert_eq!(response.tasks[0].uuid, "route-today-task");
 }
 
+#[tokio::test]
+async fn create_task_from_audio_returns_created_task_from_transcript() {
+    let pool = fixture_pool().await;
+    let things_titles = Arc::new(Mutex::new(Vec::new()));
+    let state = AppState::with_write_services(
+        ThingsRepository::new(pool),
+        Arc::new(FakeWhisperTranscriber::text(" Clean coffee\nmachine ")),
+        Arc::new(FakeThingsTaskCreator::success(
+            "things-id-1",
+            Arc::clone(&things_titles),
+        )),
+    );
+
+    let response = crate::app::router(state)
+        .oneshot(multipart_request(include_str!("tests.rs").as_bytes()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["id"], "things-id-1");
+    assert_eq!(json["attributes"]["title"], "Clean coffee machine");
+    assert_eq!(
+        things_titles.lock().unwrap().as_slice(),
+        ["Clean coffee machine"]
+    );
+}
+
+#[tokio::test]
+async fn create_task_from_audio_rejects_missing_file() {
+    let state = state_with_audio_fakes(
+        FakeWhisperTranscriber::text("unused"),
+        FakeThingsTaskCreator::success("unused", Arc::new(Mutex::new(Vec::new()))),
+    )
+    .await;
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/tasks/from-audio")
+        .header(
+            header::CONTENT_TYPE,
+            "multipart/form-data; boundary=BOUNDARY",
+        )
+        .body(Body::from("--BOUNDARY--\r\n"))
+        .unwrap();
+    let response = crate::app::router(state).oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_task_from_audio_rejects_empty_transcript() {
+    let state = state_with_audio_fakes(
+        FakeWhisperTranscriber::text(" \n\t "),
+        FakeThingsTaskCreator::success("unused", Arc::new(Mutex::new(Vec::new()))),
+    )
+    .await;
+
+    let response = crate::app::router(state)
+        .oneshot(multipart_request(b"wav"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn create_task_from_audio_maps_whisper_failure_to_bad_gateway() {
+    let state = state_with_audio_fakes(
+        FakeWhisperTranscriber::failure(),
+        FakeThingsTaskCreator::success("unused", Arc::new(Mutex::new(Vec::new()))),
+    )
+    .await;
+
+    let response = crate::app::router(state)
+        .oneshot(multipart_request(b"wav"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn create_task_from_audio_maps_things_timeout_to_gateway_timeout() {
+    let state = state_with_audio_fakes(
+        FakeWhisperTranscriber::text("Clean coffee machine"),
+        FakeThingsTaskCreator::timeout(),
+    )
+    .await;
+
+    let response = crate::app::router(state)
+        .oneshot(multipart_request(b"wav"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+}
+
 async fn fixture_pool() -> SqlitePool {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     pool.execute(
@@ -154,4 +268,113 @@ async fn fixture_pool() -> SqlitePool {
 
 fn task_ids(tasks: &[ThingsTask]) -> Vec<&str> {
     tasks.iter().map(|task| task.uuid.as_str()).collect()
+}
+
+async fn state_with_audio_fakes(
+    whisper: FakeWhisperTranscriber,
+    things: FakeThingsTaskCreator,
+) -> AppState {
+    AppState::with_write_services(
+        ThingsRepository::new(fixture_pool().await),
+        Arc::new(whisper),
+        Arc::new(things),
+    )
+}
+
+fn multipart_request(file: &[u8]) -> Request<Body> {
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        b"--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"todo.wav\"\r\nContent-Type: audio/wav\r\n\r\n",
+    );
+    body.extend_from_slice(file);
+    body.extend_from_slice(b"\r\n--BOUNDARY--\r\n");
+
+    Request::builder()
+        .method("POST")
+        .uri("/tasks/from-audio")
+        .header(
+            header::CONTENT_TYPE,
+            "multipart/form-data; boundary=BOUNDARY",
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+struct FakeWhisperTranscriber {
+    response: FakeWhisperResponse,
+}
+
+impl FakeWhisperTranscriber {
+    fn text(text: &'static str) -> Self {
+        Self {
+            response: FakeWhisperResponse::Text(text),
+        }
+    }
+
+    fn failure() -> Self {
+        Self {
+            response: FakeWhisperResponse::Failure,
+        }
+    }
+}
+
+enum FakeWhisperResponse {
+    Text(&'static str),
+    Failure,
+}
+
+impl WhisperTranscriber for FakeWhisperTranscriber {
+    fn transcribe<'a>(
+        &'a self,
+        upload: AudioUpload,
+    ) -> Pin<Box<dyn Future<Output = Result<String, WhisperError>> + Send + 'a>> {
+        Box::pin(async move {
+            assert!(!upload.bytes.is_empty());
+            match self.response {
+                FakeWhisperResponse::Text(text) => Ok(text.to_string()),
+                FakeWhisperResponse::Failure => Err(WhisperError::UpstreamStatus(500)),
+            }
+        })
+    }
+}
+
+struct FakeThingsTaskCreator {
+    response: FakeThingsResponse,
+    titles: Arc<Mutex<Vec<String>>>,
+}
+
+impl FakeThingsTaskCreator {
+    fn success(id: &'static str, titles: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            response: FakeThingsResponse::Success(id),
+            titles,
+        }
+    }
+
+    fn timeout() -> Self {
+        Self {
+            response: FakeThingsResponse::Timeout,
+            titles: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+enum FakeThingsResponse {
+    Success(&'static str),
+    Timeout,
+}
+
+impl ThingsTaskCreator for FakeThingsTaskCreator {
+    fn create_inbox_task<'a>(
+        &'a self,
+        title: String,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ThingsAddError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.titles.lock().unwrap().push(title);
+            match self.response {
+                FakeThingsResponse::Success(id) => Ok(id.to_string()),
+                FakeThingsResponse::Timeout => Err(ThingsAddError::Timeout),
+            }
+        })
+    }
 }
