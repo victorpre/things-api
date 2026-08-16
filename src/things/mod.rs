@@ -26,6 +26,33 @@ impl ThingsRepository {
             .collect())
     }
 
+    pub async fn find_inbox_task_id_created_after(
+        &self,
+        title: &str,
+        created_after: f64,
+    ) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar(
+            r#"
+            SELECT uuid
+            FROM TMTask
+            WHERE type = 0
+                AND status = 0
+                AND trashed = 0
+                AND title = ?
+                AND creationDate >= ?
+                AND area IS NULL
+                AND project IS NULL
+                AND heading IS NULL
+            ORDER BY creationDate DESC, userModificationDate DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(title)
+        .bind(created_after)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     async fn fetch_task_rows(&self, filter: TaskFilter) -> Result<Vec<TaskRow>, sqlx::Error> {
         let mut query = QueryBuilder::<Sqlite>::new(if filter.today_only {
             r#"
