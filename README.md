@@ -67,6 +67,8 @@ The Whisper request always sends these form fields:
 - `temperature`: `0.0`
 - `temperature_inc`: `0.2`
 - `response_format`: `json`
+- `prompt`: `Identify the task todo`
+- `carry_initial_prompt`: `true`
 
 Examples:
 

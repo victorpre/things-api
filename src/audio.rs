@@ -4,6 +4,13 @@ use serde::Deserialize;
 
 const DEFAULT_FILE_NAME: &str = "audio.wav";
 const DEFAULT_CONTENT_TYPE: &str = "audio/wav";
+const WHISPER_FORM_FIELDS: &[(&str, &str)] = &[
+    ("temperature", "0.0"),
+    ("temperature_inc", "0.2"),
+    ("response_format", "json"),
+    ("prompt", "Identify the task todo"),
+    ("carry_initial_prompt", "true"),
+];
 
 #[derive(Debug)]
 pub struct AudioUpload {
@@ -47,11 +54,10 @@ impl WhisperClient {
             .file_name(filename)
             .mime_str(&content_type)
             .map_err(WhisperError::InvalidMultipart)?;
-        let form = reqwest::multipart::Form::new()
-            .part("file", file)
-            .text("temperature", "0.0")
-            .text("temperature_inc", "0.2")
-            .text("response_format", "json");
+        let mut form = reqwest::multipart::Form::new().part("file", file);
+        for (name, value) in WHISPER_FORM_FIELDS {
+            form = form.text(*name, *value);
+        }
 
         let response = self
             .client
@@ -158,5 +164,14 @@ mod tests {
         let error = parse_whisper_text(br#"{"message":"missing text"}"#).unwrap_err();
 
         assert!(matches!(error, WhisperError::InvalidResponse(_)));
+    }
+
+    #[test]
+    fn whisper_form_fields_include_task_prompt() {
+        assert!(WHISPER_FORM_FIELDS.contains(&("temperature", "0.0")));
+        assert!(WHISPER_FORM_FIELDS.contains(&("temperature_inc", "0.2")));
+        assert!(WHISPER_FORM_FIELDS.contains(&("response_format", "json")));
+        assert!(WHISPER_FORM_FIELDS.contains(&("prompt", "Identify the task todo")));
+        assert!(WHISPER_FORM_FIELDS.contains(&("carry_initial_prompt", "true")));
     }
 }
