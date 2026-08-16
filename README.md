@@ -1,8 +1,8 @@
 # things-api
 
-A local, read-only HTTP API for Things 3 tasks.
+A local HTTP API for Things 3 tasks.
 
-The API reads directly from the Things 3 SQLite database and does not expose write routes. The database connection is opened with SQLite read-only mode.
+The API reads directly from the Things 3 SQLite database and opens that database connection in read-only mode. Write routes use Things' official URL scheme instead of writing to SQLite.
 
 ## Setup
 
@@ -16,6 +16,10 @@ Edit `.env`:
 
 ```sh
 THINGS_DB_PATH="/Users/you/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-XXXX/Things Database.thingsdatabase/main.sqlite"
+THINGS_API_HOST="127.0.0.1"
+THINGS_API_PORT="3000"
+WHISPER_INFERENCE_URL="http://127.0.0.1:8080/inference"
+THINGS_CREATION_TIMEOUT_SECS="15"
 ```
 
 Cultured Code documents the Things database location here:
@@ -27,7 +31,9 @@ https://culturedcode.com/things/support/articles/2982272/
 cargo run
 ```
 
-The server listens on `127.0.0.1:3000`.
+The server listens on `THINGS_API_HOST:THINGS_API_PORT`, defaulting to `127.0.0.1:3000`.
+
+For a reTerminal Sticky or another device on the same network, set `THINGS_API_HOST` to `0.0.0.0` or to the Mac's LAN IP, then call the Mac's LAN IP from the device.
 
 ## Endpoints
 
@@ -35,6 +41,8 @@ The server listens on `127.0.0.1:3000`.
 curl http://127.0.0.1:3000/health
 curl http://127.0.0.1:3000/tasks
 curl http://127.0.0.1:3000/tasks/today
+curl -X POST http://127.0.0.1:3000/tasks/from-audio \
+  -F file="@/path/to/todo.wav"
 ```
 
 `GET /tasks` supports these optional query parameters:
@@ -45,13 +53,34 @@ curl http://127.0.0.1:3000/tasks/today
 
 `GET /tasks/today` mirrors Things' Today list query: open, untrashed todos scheduled for today or earlier, including due-date-only tasks due today or earlier.
 
+`POST /tasks/from-audio` accepts multipart field `file`, forwards the WAV upload to whisper.cpp, normalizes the returned transcript, creates an Inbox task through `things:///add`, waits until the new Inbox task appears in the read-only Things database, and returns:
+
+```json
+{
+  "id": "things-task-id",
+  "attributes": {
+    "title": "Clean coffee machine"
+  }
+}
+```
+
+The Whisper request always sends these form fields:
+
+- `temperature`: `0.0`
+- `temperature_inc`: `0.2`
+- `response_format`: `json`
+
 Examples:
 
 ```sh
 curl "http://127.0.0.1:3000/tasks?status=open"
 curl "http://127.0.0.1:3000/tasks?include_trashed=true"
 curl "http://127.0.0.1:3000/tasks/today"
+curl -X POST "http://127.0.0.1:3000/tasks/from-audio" \
+  -F file="@/path/to/todo.wav"
 ```
+
+Things must still run on the same Mac as `things-api`, because task creation uses the local Things URL scheme. The API launches that URL with `open -g` so Things should not be brought to the foreground, but macOS still needs to route the URL to the Things app.
 
 ## Development
 
