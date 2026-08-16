@@ -18,7 +18,7 @@ async fn lists_tasks_with_related_metadata() {
 
     let tasks = repository.list_tasks(TaskFilter::default()).await.unwrap();
 
-    assert_eq!(tasks.len(), 11);
+    assert_eq!(tasks.len(), 8);
 
     let inbox = tasks.iter().find(|task| task.uuid == "task-open").unwrap();
     assert_eq!(inbox.title.as_deref(), Some("Open task"));
@@ -153,29 +153,6 @@ async fn filters_by_status_and_trashed_flag() {
     assert_eq!(trashed[0].uuid, "task-trashed");
 }
 
-#[tokio::test]
-async fn finds_recent_inbox_task_by_title() {
-    let fixture = FixtureDb::new().await;
-    let repository = ThingsRepository::new(fixture.read_pool().await);
-
-    let id = repository
-        .find_inbox_task_id_created_after("Fresh inbox task", 50.0)
-        .await
-        .unwrap();
-    let old_id = repository
-        .find_inbox_task_id_created_after("Old inbox task", 50.0)
-        .await
-        .unwrap();
-    let projected_id = repository
-        .find_inbox_task_id_created_after("Projected task", 50.0)
-        .await
-        .unwrap();
-
-    assert_eq!(id.as_deref(), Some("task-fresh-inbox"));
-    assert_eq!(old_id, None);
-    assert_eq!(projected_id, None);
-}
-
 struct FixtureDb {
     path: PathBuf,
 }
@@ -308,13 +285,6 @@ async fn seed_data(pool: &SqlitePool) {
             VALUES ('task-trashed', 0, 0, 1, 'Trashed task', 1, 12345, 9, 3);
         INSERT INTO TMTask (uuid, type, status, trashed, title, "index", todayIndex)
             VALUES ('task-today-index-only', 0, 0, 0, 'Today index only task', 10, 4);
-        INSERT INTO TMTask (uuid, creationDate, userModificationDate, type, status, trashed, title, "index")
-            VALUES ('task-old-inbox', 10.0, 10.0, 0, 0, 0, 'Old inbox task', 11);
-        INSERT INTO TMTask (uuid, creationDate, userModificationDate, type, status, trashed, title, "index")
-            VALUES ('task-fresh-inbox', 100.0, 100.0, 0, 0, 0, 'Fresh inbox task', 12);
-        INSERT INTO TMTask (uuid, creationDate, userModificationDate, type, status, trashed, title, project, "index")
-            VALUES ('task-projected', 100.0, 100.0, 0, 0, 0, 'Projected task', 'project-a', 13);
-
         INSERT INTO TMTag (uuid, title, "index")
             VALUES ('tag-home', 'Home', 1), ('tag-next', 'Next', 2);
         INSERT INTO TMTaskTag (tasks, tags)

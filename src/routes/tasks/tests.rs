@@ -115,16 +115,13 @@ async fn list_today_tasks_handler_returns_only_today_tasks() {
 }
 
 #[tokio::test]
-async fn create_task_from_audio_returns_created_task_from_transcript() {
+async fn create_task_from_audio_accepts_task_from_transcript() {
     let pool = fixture_pool().await;
     let things_titles = Arc::new(Mutex::new(Vec::new()));
     let state = AppState::with_write_services(
         ThingsRepository::new(pool),
         Arc::new(FakeWhisperTranscriber::text(" Clean coffee\nmachine ")),
-        Arc::new(FakeThingsTaskCreator::success(
-            "things-id-1",
-            Arc::clone(&things_titles),
-        )),
+        Arc::new(FakeThingsTaskCreator::success(Arc::clone(&things_titles))),
     );
 
     let response = crate::app::router(state)
@@ -132,11 +129,11 @@ async fn create_task_from_audio_returns_created_task_from_transcript() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["id"], "things-id-1");
+    assert!(json.get("id").is_none());
     assert_eq!(json["attributes"]["title"], "Clean coffee machine");
     assert_eq!(
         things_titles.lock().unwrap().as_slice(),
@@ -148,7 +145,7 @@ async fn create_task_from_audio_returns_created_task_from_transcript() {
 async fn create_task_from_audio_rejects_missing_file() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::text("unused"),
-        FakeThingsTaskCreator::success("unused", Arc::new(Mutex::new(Vec::new()))),
+        FakeThingsTaskCreator::success(Arc::new(Mutex::new(Vec::new()))),
     )
     .await;
 
@@ -170,7 +167,7 @@ async fn create_task_from_audio_rejects_missing_file() {
 async fn create_task_from_audio_rejects_empty_transcript() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::text(" \n\t "),
-        FakeThingsTaskCreator::success("unused", Arc::new(Mutex::new(Vec::new()))),
+        FakeThingsTaskCreator::success(Arc::new(Mutex::new(Vec::new()))),
     )
     .await;
 
@@ -186,7 +183,7 @@ async fn create_task_from_audio_rejects_empty_transcript() {
 async fn create_task_from_audio_maps_whisper_failure_to_bad_gateway() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::failure(),
-        FakeThingsTaskCreator::success("unused", Arc::new(Mutex::new(Vec::new()))),
+        FakeThingsTaskCreator::success(Arc::new(Mutex::new(Vec::new()))),
     )
     .await;
 
@@ -199,10 +196,10 @@ async fn create_task_from_audio_maps_whisper_failure_to_bad_gateway() {
 }
 
 #[tokio::test]
-async fn create_task_from_audio_maps_things_timeout_to_gateway_timeout() {
+async fn create_task_from_audio_maps_things_launch_failure_to_server_error() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::text("Clean coffee machine"),
-        FakeThingsTaskCreator::timeout(),
+        FakeThingsTaskCreator::launch_failure(),
     )
     .await;
 
@@ -211,7 +208,7 @@ async fn create_task_from_audio_maps_things_timeout_to_gateway_timeout() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 async fn fixture_pool() -> SqlitePool {
@@ -344,36 +341,36 @@ struct FakeThingsTaskCreator {
 }
 
 impl FakeThingsTaskCreator {
-    fn success(id: &'static str, titles: Arc<Mutex<Vec<String>>>) -> Self {
+    fn success(titles: Arc<Mutex<Vec<String>>>) -> Self {
         Self {
-            response: FakeThingsResponse::Success(id),
+            response: FakeThingsResponse::Success,
             titles,
         }
     }
 
-    fn timeout() -> Self {
+    fn launch_failure() -> Self {
         Self {
-            response: FakeThingsResponse::Timeout,
+            response: FakeThingsResponse::LaunchFailure,
             titles: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
 
 enum FakeThingsResponse {
-    Success(&'static str),
-    Timeout,
+    Success,
+    LaunchFailure,
 }
 
 impl ThingsTaskCreator for FakeThingsTaskCreator {
     fn create_inbox_task<'a>(
         &'a self,
         title: String,
-    ) -> Pin<Box<dyn Future<Output = Result<String, ThingsAddError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThingsAddError>> + Send + 'a>> {
         Box::pin(async move {
             self.titles.lock().unwrap().push(title);
             match self.response {
-                FakeThingsResponse::Success(id) => Ok(id.to_string()),
-                FakeThingsResponse::Timeout => Err(ThingsAddError::Timeout),
+                FakeThingsResponse::Success => Ok(()),
+                FakeThingsResponse::LaunchFailure => Err(ThingsAddError::LaunchStatus(Some(1))),
             }
         })
     }

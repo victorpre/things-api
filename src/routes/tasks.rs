@@ -57,15 +57,14 @@ async fn create_task_from_audio(
         return Err(ApiError::unprocessable_entity("transcript was empty"));
     }
 
-    let id = state
+    state
         .things_task_creator
         .create_inbox_task(title.clone())
         .await?;
 
     Ok((
-        StatusCode::CREATED,
+        StatusCode::ACCEPTED,
         Json(CreateTaskResponse {
-            id,
             attributes: CreatedTaskAttributes { title },
         }),
     ))
@@ -147,7 +146,6 @@ struct TasksResponse {
 
 #[derive(Debug, Serialize)]
 struct CreateTaskResponse {
-    id: String,
     attributes: CreatedTaskAttributes,
 }
 
@@ -240,20 +238,6 @@ impl IntoResponse for ApiError {
                 response.into_response_with_log(error)
             }
             Self::ThingsAdd(error) => match error {
-                ThingsAddError::Timeout => (
-                    StatusCode::GATEWAY_TIMEOUT,
-                    Json(ErrorResponse {
-                        error: "timed out waiting for Things task to appear",
-                    }),
-                )
-                    .into_response(),
-                ThingsAddError::Database(_) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: "failed to verify Things task creation",
-                    }),
-                )
-                    .into_response_with_log(error),
                 ThingsAddError::Launch(_) | ThingsAddError::LaunchStatus(_) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
