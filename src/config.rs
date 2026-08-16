@@ -3,11 +3,9 @@ use std::{
     ffi::OsString,
     fmt, fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 const DEFAULT_WHISPER_INFERENCE_URL: &str = "http://127.0.0.1:8080/inference";
-const DEFAULT_THINGS_CREATION_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_THINGS_API_HOST: &str = "127.0.0.1";
 const DEFAULT_THINGS_API_PORT: u16 = 3000;
 
@@ -15,7 +13,6 @@ const DEFAULT_THINGS_API_PORT: u16 = 3000;
 pub struct Config {
     pub things_db_path: PathBuf,
     pub whisper_inference_url: String,
-    pub things_creation_timeout: Duration,
     pub things_api_host: String,
     pub things_api_port: u16,
 }
@@ -26,10 +23,6 @@ impl Config {
         Self::from_raw(ConfigValues {
             things_db_path: read_config_os_value("THINGS_DB_PATH", &dotenv),
             whisper_inference_url: read_config_value("WHISPER_INFERENCE_URL", &dotenv),
-            things_creation_timeout_secs: read_config_value(
-                "THINGS_CREATION_TIMEOUT_SECS",
-                &dotenv,
-            ),
             things_api_host: read_config_value("THINGS_API_HOST", &dotenv),
             things_api_port: read_config_value("THINGS_API_PORT", &dotenv),
         })
@@ -52,7 +45,6 @@ impl Config {
             return Err(ConfigError::EmptyThingsDbPath);
         }
 
-        let things_creation_timeout = parse_timeout_secs(values.things_creation_timeout_secs)?;
         let things_api_port = parse_api_port(values.things_api_port)?;
 
         Self::from_db_path_with_write_config(
@@ -60,7 +52,6 @@ impl Config {
             values
                 .whisper_inference_url
                 .unwrap_or_else(|| DEFAULT_WHISPER_INFERENCE_URL.to_string()),
-            things_creation_timeout,
             values
                 .things_api_host
                 .unwrap_or_else(|| DEFAULT_THINGS_API_HOST.to_string()),
@@ -73,7 +64,6 @@ impl Config {
         Self::from_db_path_with_write_config(
             path,
             DEFAULT_WHISPER_INFERENCE_URL.to_string(),
-            Duration::from_secs(DEFAULT_THINGS_CREATION_TIMEOUT_SECS),
             DEFAULT_THINGS_API_HOST.to_string(),
             DEFAULT_THINGS_API_PORT,
         )
@@ -82,7 +72,6 @@ impl Config {
     fn from_db_path_with_write_config(
         path: PathBuf,
         whisper_inference_url: String,
-        things_creation_timeout: Duration,
         things_api_host: String,
         things_api_port: u16,
     ) -> Result<Self, ConfigError> {
@@ -93,7 +82,6 @@ impl Config {
         Ok(Self {
             things_db_path: path,
             whisper_inference_url,
-            things_creation_timeout,
             things_api_host,
             things_api_port,
         })
@@ -105,7 +93,6 @@ pub enum ConfigError {
     MissingThingsDbPath,
     EmptyThingsDbPath,
     InvalidThingsDbPath { path: PathBuf },
-    InvalidThingsCreationTimeout { value: String },
     InvalidThingsApiPort { value: String },
 }
 
@@ -124,10 +111,6 @@ impl fmt::Display for ConfigError {
                     path.display()
                 )
             }
-            Self::InvalidThingsCreationTimeout { value } => write!(
-                f,
-                "THINGS_CREATION_TIMEOUT_SECS must be a positive integer, got {value:?}"
-            ),
             Self::InvalidThingsApiPort { value } => {
                 write!(f, "THINGS_API_PORT must be a valid TCP port, got {value:?}")
             }
@@ -141,7 +124,6 @@ impl std::error::Error for ConfigError {}
 struct ConfigValues {
     things_db_path: Option<OsString>,
     whisper_inference_url: Option<String>,
-    things_creation_timeout_secs: Option<String>,
     things_api_host: Option<String>,
     things_api_port: Option<String>,
 }
@@ -237,24 +219,6 @@ fn read_config_value(key: &str, dotenv: &DotenvValues) -> Option<String> {
     env::var(key)
         .ok()
         .or_else(|| dotenv.get(key).map(str::to_string))
-}
-
-fn parse_timeout_secs(value: Option<String>) -> Result<Duration, ConfigError> {
-    let Some(value) = value else {
-        return Ok(Duration::from_secs(DEFAULT_THINGS_CREATION_TIMEOUT_SECS));
-    };
-
-    let seconds = value
-        .parse::<u64>()
-        .map_err(|_| ConfigError::InvalidThingsCreationTimeout {
-            value: value.clone(),
-        })?;
-
-    if seconds == 0 {
-        return Err(ConfigError::InvalidThingsCreationTimeout { value });
-    }
-
-    Ok(Duration::from_secs(seconds))
 }
 
 fn parse_api_port(value: Option<String>) -> Result<u16, ConfigError> {

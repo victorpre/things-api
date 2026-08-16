@@ -16,10 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let whisper_transcriber = Arc::new(audio::WhisperClient::new(
         config.whisper_inference_url.clone(),
     ));
-    let things_task_creator = Arc::new(things_url::ThingsUrlClient::new(
-        repository.clone(),
-        config.things_creation_timeout,
-    ));
+    let things_task_creator = Arc::new(things_url::ThingsUrlClient::new());
     let state =
         app::AppState::with_write_services(repository, whisper_transcriber, things_task_creator);
     let bind_address = format!("{}:{}", config.things_api_host, config.things_api_port);

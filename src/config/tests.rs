@@ -35,7 +35,6 @@ fn accepts_existing_db_path() {
         config.whisper_inference_url,
         "http://127.0.0.1:8080/inference"
     );
-    assert_eq!(config.things_creation_timeout.as_secs(), 15);
     assert_eq!(config.things_api_host, "127.0.0.1");
     assert_eq!(config.things_api_port, 3000);
     std::fs::remove_file(config.things_db_path).unwrap();
@@ -49,7 +48,6 @@ fn accepts_write_route_config_values() {
     let config = Config::from_raw(ConfigValues {
         things_db_path: Some(path.clone().into_os_string()),
         whisper_inference_url: Some("http://127.0.0.1:9090/inference".to_string()),
-        things_creation_timeout_secs: Some("30".to_string()),
         things_api_host: Some("0.0.0.0".to_string()),
         things_api_port: Some("3001".to_string()),
     })
@@ -60,31 +58,9 @@ fn accepts_write_route_config_values() {
         config.whisper_inference_url,
         "http://127.0.0.1:9090/inference"
     );
-    assert_eq!(config.things_creation_timeout.as_secs(), 30);
     assert_eq!(config.things_api_host, "0.0.0.0");
     assert_eq!(config.things_api_port, 3001);
     std::fs::remove_file(config.things_db_path).unwrap();
-}
-
-#[test]
-fn rejects_invalid_creation_timeout() {
-    let path = unique_temp_path("main.sqlite");
-    File::create(&path).unwrap();
-
-    let error = Config::from_raw(ConfigValues {
-        things_db_path: Some(path.clone().into_os_string()),
-        things_creation_timeout_secs: Some("0".to_string()),
-        ..ConfigValues::default()
-    })
-    .unwrap_err();
-
-    assert_eq!(
-        error,
-        ConfigError::InvalidThingsCreationTimeout {
-            value: "0".to_string()
-        }
-    );
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -131,7 +107,6 @@ fn parses_write_route_dotenv_lines() {
         r#"
         THINGS_DB_PATH="/tmp/main.sqlite"
         WHISPER_INFERENCE_URL="http://127.0.0.1:8080/inference"
-        THINGS_CREATION_TIMEOUT_SECS="20"
         THINGS_API_HOST="0.0.0.0"
         THINGS_API_PORT="3001"
         "#,
@@ -142,7 +117,6 @@ fn parses_write_route_dotenv_lines() {
         dotenv.get("WHISPER_INFERENCE_URL"),
         Some("http://127.0.0.1:8080/inference")
     );
-    assert_eq!(dotenv.get("THINGS_CREATION_TIMEOUT_SECS"), Some("20"));
     assert_eq!(dotenv.get("THINGS_API_HOST"), Some("0.0.0.0"));
     assert_eq!(dotenv.get("THINGS_API_PORT"), Some("3001"));
 }

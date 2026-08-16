@@ -19,7 +19,6 @@ THINGS_DB_PATH="/Users/you/Library/Group Containers/JLMPQHK86H.com.culturedcode.
 THINGS_API_HOST="127.0.0.1"
 THINGS_API_PORT="3000"
 WHISPER_INFERENCE_URL="http://127.0.0.1:8080/inference"
-THINGS_CREATION_TIMEOUT_SECS="15"
 ```
 
 Cultured Code documents the Things database location here:
@@ -53,11 +52,10 @@ curl -X POST http://127.0.0.1:3000/tasks/from-audio \
 
 `GET /tasks/today` mirrors Things' Today list query: open, untrashed todos scheduled for today or earlier, including due-date-only tasks due today or earlier.
 
-`POST /tasks/from-audio` accepts multipart field `file`, forwards the WAV upload to whisper.cpp, normalizes the returned transcript, creates an Inbox task through `things:///add`, waits until the new Inbox task appears in the read-only Things database, and returns:
+`POST /tasks/from-audio` accepts multipart field `file`, forwards the WAV upload to whisper.cpp, normalizes the returned transcript, creates an Inbox task through `things:///add`, and returns `202 Accepted` after macOS accepts the URL launch:
 
 ```json
 {
-  "id": "things-task-id",
   "attributes": {
     "title": "Clean coffee machine"
   }
