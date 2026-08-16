@@ -285,7 +285,6 @@ async fn seed_data(pool: &SqlitePool) {
             VALUES ('task-trashed', 0, 0, 1, 'Trashed task', 1, 12345, 9, 3);
         INSERT INTO TMTask (uuid, type, status, trashed, title, "index", todayIndex)
             VALUES ('task-today-index-only', 0, 0, 0, 'Today index only task', 10, 4);
-
         INSERT INTO TMTag (uuid, title, "index")
             VALUES ('tag-home', 'Home', 1), ('tag-next', 'Next', 2);
         INSERT INTO TMTaskTag (tasks, tags)
