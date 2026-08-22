@@ -2,17 +2,17 @@ use axum::Router;
 use std::sync::Arc;
 
 use crate::{
-    audio::WhisperTranscriber, routes, things::ThingsRepository, things_url::ThingsTaskCreator,
+    audio::WhisperTranscriber, routes, things::ThingsRepository, things_url::ThingsTaskWriter,
 };
 
 #[cfg(test)]
-use crate::{audio::DisabledWhisperTranscriber, things_url::DisabledThingsTaskCreator};
+use crate::{audio::DisabledWhisperTranscriber, things_url::DisabledThingsTaskWriter};
 
 #[derive(Clone)]
 pub struct AppState {
     pub repository: ThingsRepository,
     pub whisper_transcriber: Arc<dyn WhisperTranscriber>,
-    pub things_task_creator: Arc<dyn ThingsTaskCreator>,
+    pub things_task_writer: Arc<dyn ThingsTaskWriter>,
 }
 
 impl AppState {
@@ -21,19 +21,19 @@ impl AppState {
         Self::with_write_services(
             repository,
             Arc::new(DisabledWhisperTranscriber),
-            Arc::new(DisabledThingsTaskCreator),
+            Arc::new(DisabledThingsTaskWriter),
         )
     }
 
     pub fn with_write_services(
         repository: ThingsRepository,
         whisper_transcriber: Arc<dyn WhisperTranscriber>,
-        things_task_creator: Arc<dyn ThingsTaskCreator>,
+        things_task_writer: Arc<dyn ThingsTaskWriter>,
     ) -> Self {
         Self {
             repository,
             whisper_transcriber,
-            things_task_creator,
+            things_task_writer,
         }
     }
 }
