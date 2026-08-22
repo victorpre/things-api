@@ -14,7 +14,16 @@ impl ThingsRepository {
     }
 
     pub async fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<ThingsTask>, sqlx::Error> {
-        let rows = self.fetch_task_rows(filter).await?;
+        let rows = self.fetch_task_rows(TaskQuery::Filtered(filter)).await?;
+        self.tasks_from_rows(rows).await
+    }
+
+    pub async fn list_task_list(&self, list: TaskList) -> Result<Vec<ThingsTask>, sqlx::Error> {
+        let rows = self.fetch_task_rows(TaskQuery::List(list)).await?;
+        self.tasks_from_rows(rows).await
+    }
+
+    async fn tasks_from_rows(&self, rows: Vec<TaskRow>) -> Result<Vec<ThingsTask>, sqlx::Error> {
         let mut tags_by_task = self.fetch_tags_by_task(&rows).await?;
 
         Ok(rows
@@ -26,8 +35,16 @@ impl ThingsRepository {
             .collect())
     }
 
-    async fn fetch_task_rows(&self, filter: TaskFilter) -> Result<Vec<TaskRow>, sqlx::Error> {
-        let mut query = QueryBuilder::<Sqlite>::new(if filter.today_only {
+    async fn fetch_task_rows(&self, task_query: TaskQuery) -> Result<Vec<TaskRow>, sqlx::Error> {
+        let needs_today = matches!(
+            task_query,
+            TaskQuery::List(TaskList::Today)
+                | TaskQuery::Filtered(TaskFilter {
+                    today_only: true,
+                    ..
+                })
+        );
+        let mut query = QueryBuilder::<Sqlite>::new(if needs_today {
             r#"
             WITH today(code) AS (
                 SELECT
@@ -124,8 +141,25 @@ impl ThingsRepository {
             "#,
         );
 
-        if filter.today_only {
-            query.push(
+        match task_query {
+            TaskQuery::List(TaskList::Inbox) => {
+                query.push(
+                    r#"
+                    AND task.status = 0
+                    AND task.trashed = 0
+                    AND task.start = 0
+                    AND task.project IS NULL
+                    AND task.startDate IS NULL
+                    AND task.rt1_recurrenceRule IS NULL
+                    AND COALESCE(project.trashed, heading_project.trashed, 0) = 0
+                    "#,
+                );
+            }
+            TaskQuery::List(TaskList::Today)
+            | TaskQuery::Filtered(TaskFilter {
+                today_only: true, ..
+            }) => {
+                query.push(
                 r#"
                 AND task.status = 0
                 AND task.trashed = 0
@@ -143,21 +177,23 @@ impl ThingsRepository {
                 )
                 "#,
             );
-        } else {
-            if let Some(status) = filter.status {
-                query.push(" AND task.status = ");
-                query.push_bind(status);
             }
+            TaskQuery::Filtered(filter) => {
+                if let Some(status) = filter.status {
+                    query.push(" AND task.status = ");
+                    query.push_bind(status);
+                }
 
-            match filter.trashed {
-                Some(trashed) => {
-                    query.push(" AND task.trashed = ");
-                    query.push_bind(i64::from(trashed));
+                match filter.trashed {
+                    Some(trashed) => {
+                        query.push(" AND task.trashed = ");
+                        query.push_bind(i64::from(trashed));
+                    }
+                    None if !filter.include_trashed => {
+                        query.push(" AND task.trashed = 0");
+                    }
+                    None => {}
                 }
-                None if !filter.include_trashed => {
-                    query.push(" AND task.trashed = 0");
-                }
-                None => {}
             }
         }
 
@@ -214,6 +250,18 @@ impl ThingsRepository {
 
         Ok(tags_by_task)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskList {
+    Inbox,
+    Today,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskQuery {
+    Filtered(TaskFilter),
+    List(TaskList),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

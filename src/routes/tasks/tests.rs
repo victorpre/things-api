@@ -78,6 +78,39 @@ fn today_filter_ignores_explicit_list_filters() {
     );
 }
 
+#[test]
+fn task_lists_query_defaults_to_inbox_and_today() {
+    assert_eq!(
+        ListTaskListsQuery::default().into_selected_lists().unwrap(),
+        vec![TaskList::Inbox, TaskList::Today]
+    );
+}
+
+#[test]
+fn task_lists_query_preserves_selected_order() {
+    assert_eq!(
+        ListTaskListsQuery {
+            selected: Some("today,inbox".to_string()),
+        }
+        .into_selected_lists()
+        .unwrap(),
+        vec![TaskList::Today, TaskList::Inbox]
+    );
+}
+
+#[test]
+fn task_lists_query_rejects_empty_unknown_and_duplicate_ids() {
+    for selected in ["", "today,,inbox", "foo", "today,today"] {
+        let error = ListTaskListsQuery {
+            selected: Some(selected.to_string()),
+        }
+        .into_selected_lists()
+        .unwrap_err();
+
+        assert!(matches!(error, ApiError::BadRequest { .. }));
+    }
+}
+
 #[tokio::test]
 async fn list_tasks_handler_returns_tasks_from_repository() {
     let pool = fixture_pool().await;
@@ -99,6 +132,85 @@ async fn list_tasks_handler_returns_tasks_from_repository() {
         vec!["route-today-index-only", "route-task", "route-today-task"]
     );
     assert!(response.tasks.iter().all(|task| task.status_code == 0));
+}
+
+#[tokio::test]
+async fn list_task_lists_handler_returns_inbox_and_today_by_default() {
+    let pool = fixture_pool().await;
+    let state = AppState::new(ThingsRepository::new(pool));
+
+    let Json(response) = list_task_lists(State(state), Query(ListTaskListsQuery::default()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.lists.len(), 2);
+    assert_eq!(response.lists[0].id, "inbox");
+    assert_eq!(response.lists[0].title, "Inbox");
+    assert_eq!(task_ids(&response.lists[0].tasks), vec!["route-task"]);
+    assert_eq!(response.lists[1].id, "today");
+    assert_eq!(response.lists[1].title, "Today");
+    assert_eq!(task_ids(&response.lists[1].tasks), vec!["route-today-task"]);
+}
+
+#[tokio::test]
+async fn list_task_lists_handler_uses_selected_order() {
+    let pool = fixture_pool().await;
+    let state = AppState::new(ThingsRepository::new(pool));
+
+    let Json(response) = list_task_lists(
+        State(state),
+        Query(ListTaskListsQuery {
+            selected: Some("today,inbox".to_string()),
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        response
+            .lists
+            .iter()
+            .map(|list| list.id)
+            .collect::<Vec<_>>(),
+        vec!["today", "inbox"]
+    );
+}
+
+#[tokio::test]
+async fn list_task_lists_handler_returns_selected_list_only() {
+    let pool = fixture_pool().await;
+    let state = AppState::new(ThingsRepository::new(pool));
+
+    let Json(response) = list_task_lists(
+        State(state),
+        Query(ListTaskListsQuery {
+            selected: Some("inbox".to_string()),
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.lists.len(), 1);
+    assert_eq!(response.lists[0].id, "inbox");
+}
+
+#[tokio::test]
+async fn list_task_lists_route_rejects_invalid_selected_values() {
+    let state = AppState::new(ThingsRepository::new(fixture_pool().await));
+
+    for selected in ["foo", "", "today,today"] {
+        let response = crate::app::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/tasks/lists?selected={selected}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 #[tokio::test]
@@ -247,10 +359,10 @@ async fn fixture_pool() -> SqlitePool {
         CREATE TABLE TMTaskTag (tasks TEXT NOT NULL, tags TEXT NOT NULL);
         CREATE TABLE TMTag (uuid TEXT PRIMARY KEY, title TEXT, "index" INTEGER);
 
-        INSERT INTO TMTask (uuid, type, status, trashed, title, "index")
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, "index")
             VALUES
-                ('route-task', 0, 0, 0, 'Route task', 1),
-                ('route-completed', 0, 3, 0, 'Completed route task', 2);
+                ('route-task', 0, 0, 0, 'Route task', 0, 1),
+                ('route-completed', 0, 3, 0, 'Completed route task', 0, 2);
         INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, "index")
             VALUES ('route-today-task', 0, 0, 0, 'Today route task', 1, 1, 3);
         INSERT INTO TMTask (uuid, type, status, trashed, title, todayIndex, "index")
