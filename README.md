@@ -39,6 +39,7 @@ For a reTerminal Sticky or another device on the same network, set `THINGS_API_H
 ```sh
 curl http://127.0.0.1:3000/health
 curl http://127.0.0.1:3000/tasks
+curl http://127.0.0.1:3000/tasks/lists
 curl http://127.0.0.1:3000/tasks/today
 curl -X POST http://127.0.0.1:3000/tasks/from-audio \
   -F file="@/path/to/todo.wav"
@@ -51,6 +52,26 @@ curl -X POST http://127.0.0.1:3000/tasks/from-audio \
 - `include_trashed`: `true` or `false`
 
 `GET /tasks/today` mirrors Things' Today list query: open, untrashed todos scheduled for today or earlier, including due-date-only tasks due today or earlier.
+
+`GET /tasks/lists` returns selected Things lists in one response. By default it returns Inbox and Today:
+
+```json
+{
+  "lists": [
+    { "id": "inbox", "title": "Inbox", "tasks": [] },
+    { "id": "today", "title": "Today", "tasks": [] }
+  ]
+}
+```
+
+Use `selected` to choose and order lists:
+
+```sh
+curl "http://127.0.0.1:3000/tasks/lists?selected=today,inbox"
+curl "http://127.0.0.1:3000/tasks/lists?selected=inbox"
+```
+
+Supported list ids are `inbox` and `today`. Inbox mirrors Things' Inbox query: open, untrashed, unscheduled, non-repeating todos without a project. Today matches `GET /tasks/today`.
 
 `POST /tasks/from-audio` accepts multipart field `file`, forwards the WAV upload to whisper.cpp, normalizes the returned transcript, creates an Inbox task through `things:///add`, and returns `202 Accepted` after macOS accepts the URL launch:
 
@@ -75,6 +96,7 @@ Examples:
 ```sh
 curl "http://127.0.0.1:3000/tasks?status=open"
 curl "http://127.0.0.1:3000/tasks?include_trashed=true"
+curl "http://127.0.0.1:3000/tasks/lists?selected=today,inbox"
 curl "http://127.0.0.1:3000/tasks/today"
 curl -X POST "http://127.0.0.1:3000/tasks/from-audio" \
   -F file="@/path/to/todo.wav"

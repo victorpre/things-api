@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     app::AppState,
     audio::{AudioUpload, WhisperError, normalize_transcript},
-    things::{TaskFilter, ThingsTask},
+    things::{TaskFilter, TaskList, ThingsTask},
     things_url::ThingsAddError,
 };
 
@@ -19,6 +19,7 @@ const AUDIO_UPLOAD_LIMIT_BYTES: usize = 50 * 1024 * 1024;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tasks", get(list_tasks))
+        .route("/tasks/lists", get(list_task_lists))
         .route("/tasks/today", get(list_today_tasks))
         .route(
             "/tasks/from-audio",
@@ -34,6 +35,25 @@ async fn list_tasks(
     let tasks = state.repository.list_tasks(filter).await?;
 
     Ok(Json(TasksResponse { tasks }))
+}
+
+async fn list_task_lists(
+    State(state): State<AppState>,
+    Query(query): Query<ListTaskListsQuery>,
+) -> Result<Json<TaskListsResponse>, ApiError> {
+    let selected_lists = query.into_selected_lists()?;
+    let mut lists = Vec::with_capacity(selected_lists.len());
+
+    for list in selected_lists {
+        let tasks = state.repository.list_task_list(list).await?;
+        lists.push(TaskListResponse {
+            id: task_list_id(list),
+            title: task_list_title(list),
+            tasks,
+        });
+    }
+
+    Ok(Json(TaskListsResponse { lists }))
 }
 
 async fn list_today_tasks(
@@ -102,6 +122,11 @@ struct ListTasksQuery {
     include_trashed: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ListTaskListsQuery {
+    selected: Option<String>,
+}
+
 impl ListTasksQuery {
     fn into_filter(self) -> Result<TaskFilter, ApiError> {
         Ok(TaskFilter {
@@ -126,6 +151,40 @@ impl ListTasksQuery {
     }
 }
 
+impl ListTaskListsQuery {
+    fn into_selected_lists(self) -> Result<Vec<TaskList>, ApiError> {
+        let Some(selected) = self.selected else {
+            return Ok(vec![TaskList::Inbox, TaskList::Today]);
+        };
+
+        if selected.is_empty() {
+            return Err(ApiError::bad_request(
+                "selected must include inbox, today, or both",
+            ));
+        }
+
+        let mut lists = Vec::new();
+        for value in selected.split(',') {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err(ApiError::bad_request(
+                    "selected must not include empty list ids",
+                ));
+            }
+
+            let list = parse_task_list(value)?;
+            if lists.contains(&list) {
+                return Err(ApiError::bad_request(
+                    "selected must not include duplicate list ids",
+                ));
+            }
+            lists.push(list);
+        }
+
+        Ok(lists)
+    }
+}
+
 fn parse_status(status: &str) -> Result<i64, ApiError> {
     match status {
         "open" => Ok(0),
@@ -139,8 +198,44 @@ fn parse_status(status: &str) -> Result<i64, ApiError> {
     }
 }
 
+fn parse_task_list(value: &str) -> Result<TaskList, ApiError> {
+    match value {
+        "inbox" => Ok(TaskList::Inbox),
+        "today" => Ok(TaskList::Today),
+        _ => Err(ApiError::bad_request(
+            "selected must contain only inbox and today",
+        )),
+    }
+}
+
+fn task_list_id(list: TaskList) -> &'static str {
+    match list {
+        TaskList::Inbox => "inbox",
+        TaskList::Today => "today",
+    }
+}
+
+fn task_list_title(list: TaskList) -> &'static str {
+    match list {
+        TaskList::Inbox => "Inbox",
+        TaskList::Today => "Today",
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct TasksResponse {
+    tasks: Vec<ThingsTask>,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskListsResponse {
+    lists: Vec<TaskListResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskListResponse {
+    id: &'static str,
+    title: &'static str,
     tasks: Vec<ThingsTask>,
 }
 

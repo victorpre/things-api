@@ -18,7 +18,7 @@ async fn lists_tasks_with_related_metadata() {
 
     let tasks = repository.list_tasks(TaskFilter::default()).await.unwrap();
 
-    assert_eq!(tasks.len(), 8);
+    assert_eq!(tasks.len(), 11);
 
     let inbox = tasks.iter().find(|task| task.uuid == "task-open").unwrap();
     assert_eq!(inbox.title.as_deref(), Some("Open task"));
@@ -41,6 +41,29 @@ async fn lists_tasks_with_related_metadata() {
         .unwrap();
     assert_eq!(completed.status, TaskStatus::Completed);
     assert_eq!(completed.status_code, 3);
+}
+
+#[tokio::test]
+async fn filters_to_inbox_tasks() {
+    let fixture = FixtureDb::new().await;
+    let repository = ThingsRepository::new(fixture.read_pool().await);
+
+    let tasks = repository.list_task_list(TaskList::Inbox).await.unwrap();
+
+    assert_eq!(task_ids(&tasks), vec!["task-inbox", "task-inbox-area"]);
+}
+
+#[tokio::test]
+async fn filters_to_today_task_list() {
+    let fixture = FixtureDb::new().await;
+    let repository = ThingsRepository::new(fixture.read_pool().await);
+
+    let tasks = repository.list_task_list(TaskList::Today).await.unwrap();
+
+    assert_eq!(
+        task_ids(&tasks),
+        vec!["task-open", "task-someday-overdue", "task-due"]
+    );
 }
 
 #[tokio::test]
@@ -259,6 +282,10 @@ async fn seed_data(pool: &SqlitePool) {
             VALUES ('project-a', 1, 0, 0, 'Project A', 'area-a');
         INSERT INTO TMTask (uuid, type, status, trashed, title, project)
             VALUES ('heading-a', 2, 0, 0, 'Heading A', 'project-a');
+        INSERT INTO TMTask (uuid, type, status, trashed, title)
+            VALUES ('project-trashed', 1, 0, 1, 'Trashed Project');
+        INSERT INTO TMTask (uuid, type, status, trashed, title, project)
+            VALUES ('heading-trashed-project', 2, 0, 0, 'Heading in trashed project', 'project-trashed');
 
         INSERT INTO TMTask (
             uuid, creationDate, userModificationDate, type, status, trashed,
@@ -285,6 +312,12 @@ async fn seed_data(pool: &SqlitePool) {
             VALUES ('task-trashed', 0, 0, 1, 'Trashed task', 1, 12345, 9, 3);
         INSERT INTO TMTask (uuid, type, status, trashed, title, "index", todayIndex)
             VALUES ('task-today-index-only', 0, 0, 0, 'Today index only task', 10, 4);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, "index")
+            VALUES ('task-inbox', 0, 0, 0, 'Inbox task', 0, NULL, 11);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, area, "index")
+            VALUES ('task-inbox-area', 0, 0, 0, 'Area inbox task', 0, NULL, 'area-a', 12);
+        INSERT INTO TMTask (uuid, type, status, trashed, title, start, startDate, heading, "index")
+            VALUES ('task-inbox-hidden-heading', 0, 0, 0, 'Hidden inbox task', 0, NULL, 'heading-trashed-project', 13);
         INSERT INTO TMTag (uuid, title, "index")
             VALUES ('tag-home', 'Home', 1), ('tag-next', 'Next', 2);
         INSERT INTO TMTaskTag (tasks, tags)
