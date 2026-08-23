@@ -15,6 +15,7 @@ pub struct Config {
     pub whisper_inference_url: String,
     pub things_api_host: String,
     pub things_api_port: u16,
+    pub things_auth_token: Option<String>,
 }
 
 impl Config {
@@ -25,6 +26,7 @@ impl Config {
             whisper_inference_url: read_config_value("WHISPER_INFERENCE_URL", &dotenv),
             things_api_host: read_config_value("THINGS_API_HOST", &dotenv),
             things_api_port: read_config_value("THINGS_API_PORT", &dotenv),
+            things_auth_token: read_config_value("THINGS_AUTH_TOKEN", &dotenv),
         })
     }
 
@@ -56,6 +58,7 @@ impl Config {
                 .things_api_host
                 .unwrap_or_else(|| DEFAULT_THINGS_API_HOST.to_string()),
             things_api_port,
+            values.things_auth_token,
         )
     }
 
@@ -66,6 +69,7 @@ impl Config {
             DEFAULT_WHISPER_INFERENCE_URL.to_string(),
             DEFAULT_THINGS_API_HOST.to_string(),
             DEFAULT_THINGS_API_PORT,
+            None,
         )
     }
 
@@ -74,6 +78,7 @@ impl Config {
         whisper_inference_url: String,
         things_api_host: String,
         things_api_port: u16,
+        things_auth_token: Option<String>,
     ) -> Result<Self, ConfigError> {
         if !path.is_file() {
             return Err(ConfigError::InvalidThingsDbPath { path });
@@ -84,6 +89,7 @@ impl Config {
             whisper_inference_url,
             things_api_host,
             things_api_port,
+            things_auth_token,
         })
     }
 }
@@ -126,6 +132,7 @@ struct ConfigValues {
     whisper_inference_url: Option<String>,
     things_api_host: Option<String>,
     things_api_port: Option<String>,
+    things_auth_token: Option<String>,
 }
 
 trait OsStringExt {

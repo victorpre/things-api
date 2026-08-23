@@ -1,9 +1,9 @@
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Query, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +11,7 @@ use crate::{
     app::AppState,
     audio::{AudioUpload, WhisperError, normalize_transcript},
     things::{TaskFilter, TaskList, ThingsTask},
-    things_url::ThingsAddError,
+    things_url::ThingsWriteError,
 };
 
 const AUDIO_UPLOAD_LIMIT_BYTES: usize = 50 * 1024 * 1024;
@@ -19,6 +19,7 @@ const AUDIO_UPLOAD_LIMIT_BYTES: usize = 50 * 1024 * 1024;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tasks", get(list_tasks))
+        .route("/tasks/{id}", patch(update_task))
         .route("/tasks/lists", get(list_task_lists))
         .route("/tasks/today", get(list_today_tasks))
         .route(
@@ -66,6 +67,24 @@ async fn list_today_tasks(
     Ok(Json(TasksResponse { tasks }))
 }
 
+async fn update_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateTaskRequest>,
+) -> Result<(StatusCode, Json<UpdateTaskResponse>), ApiError> {
+    let attributes = payload.into_attributes()?;
+
+    state
+        .things_task_writer
+        .update_task_status(id.clone(), attributes.completed, attributes.canceled)
+        .await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(UpdateTaskResponse { id, attributes }),
+    ))
+}
+
 async fn create_task_from_audio(
     State(state): State<AppState>,
     multipart: Multipart,
@@ -78,7 +97,7 @@ async fn create_task_from_audio(
     }
 
     state
-        .things_task_creator
+        .things_task_writer
         .create_inbox_task(title.clone())
         .await?;
 
@@ -125,6 +144,12 @@ struct ListTasksQuery {
 #[derive(Debug, Deserialize, Default)]
 struct ListTaskListsQuery {
     selected: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateTaskRequest {
+    completed: Option<bool>,
+    canceled: Option<bool>,
 }
 
 impl ListTasksQuery {
@@ -182,6 +207,21 @@ impl ListTaskListsQuery {
         }
 
         Ok(lists)
+    }
+}
+
+impl UpdateTaskRequest {
+    fn into_attributes(self) -> Result<UpdateTaskAttributes, ApiError> {
+        if self.completed.is_none() && self.canceled.is_none() {
+            return Err(ApiError::bad_request(
+                "at least one of completed or canceled is required",
+            ));
+        }
+
+        Ok(UpdateTaskAttributes {
+            completed: self.completed,
+            canceled: self.canceled,
+        })
     }
 }
 
@@ -249,12 +289,24 @@ struct CreatedTaskAttributes {
     title: String,
 }
 
+#[derive(Debug, Serialize)]
+struct UpdateTaskResponse {
+    id: String,
+    attributes: UpdateTaskAttributes,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateTaskAttributes {
+    completed: Option<bool>,
+    canceled: Option<bool>,
+}
+
 #[derive(Debug)]
 enum ApiError {
     BadRequest { message: &'static str },
     Database(sqlx::Error),
     Multipart(axum::extract::multipart::MultipartError),
-    ThingsAdd(ThingsAddError),
+    ThingsWrite(ThingsWriteError),
     UnprocessableEntity { message: &'static str },
     Whisper(WhisperError),
 }
@@ -285,9 +337,9 @@ impl From<WhisperError> for ApiError {
     }
 }
 
-impl From<ThingsAddError> for ApiError {
-    fn from(error: ThingsAddError) -> Self {
-        Self::ThingsAdd(error)
+impl From<ThingsWriteError> for ApiError {
+    fn from(error: ThingsWriteError) -> Self {
+        Self::ThingsWrite(error)
     }
 }
 
@@ -332,11 +384,23 @@ impl IntoResponse for ApiError {
                 );
                 response.into_response_with_log(error)
             }
-            Self::ThingsAdd(error) => match error {
-                ThingsAddError::Launch(_) | ThingsAddError::LaunchStatus(_) => (
+            Self::ThingsWrite(error) => match error {
+                ThingsWriteError::MissingUpdateAuthToken => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
-                        error: "failed to open Things add URL",
+                        error: "Things update auth token is not configured",
+                    }),
+                )
+                    .into_response_with_log(error),
+                ThingsWriteError::Launch { operation, .. }
+                | ThingsWriteError::LaunchStatus { operation, .. } => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: match operation.action_name() {
+                            "add" => "failed to open Things add URL",
+                            "update" => "failed to open Things update URL",
+                            _ => "failed to open Things URL",
+                        },
                     }),
                 )
                     .into_response_with_log(error),

@@ -37,6 +37,7 @@ fn accepts_existing_db_path() {
     );
     assert_eq!(config.things_api_host, "127.0.0.1");
     assert_eq!(config.things_api_port, 3000);
+    assert_eq!(config.things_auth_token, None);
     std::fs::remove_file(config.things_db_path).unwrap();
 }
 
@@ -50,6 +51,7 @@ fn accepts_write_route_config_values() {
         whisper_inference_url: Some("http://127.0.0.1:9090/inference".to_string()),
         things_api_host: Some("0.0.0.0".to_string()),
         things_api_port: Some("3001".to_string()),
+        things_auth_token: Some("secret-token".to_string()),
     })
     .unwrap();
 
@@ -60,6 +62,7 @@ fn accepts_write_route_config_values() {
     );
     assert_eq!(config.things_api_host, "0.0.0.0");
     assert_eq!(config.things_api_port, 3001);
+    assert_eq!(config.things_auth_token.as_deref(), Some("secret-token"));
     std::fs::remove_file(config.things_db_path).unwrap();
 }
 
@@ -109,6 +112,7 @@ fn parses_write_route_dotenv_lines() {
         WHISPER_INFERENCE_URL="http://127.0.0.1:8080/inference"
         THINGS_API_HOST="0.0.0.0"
         THINGS_API_PORT="3001"
+        THINGS_AUTH_TOKEN="secret-token"
         "#,
     );
 
@@ -119,6 +123,7 @@ fn parses_write_route_dotenv_lines() {
     );
     assert_eq!(dotenv.get("THINGS_API_HOST"), Some("0.0.0.0"));
     assert_eq!(dotenv.get("THINGS_API_PORT"), Some("3001"));
+    assert_eq!(dotenv.get("THINGS_AUTH_TOKEN"), Some("secret-token"));
 }
 
 fn unique_temp_path(name: &str) -> PathBuf {

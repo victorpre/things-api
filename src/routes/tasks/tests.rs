@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     audio::{AudioUpload, WhisperError, WhisperTranscriber},
     things::ThingsRepository,
-    things_url::{ThingsAddError, ThingsTaskCreator},
+    things_url::{ThingsTaskWriter, ThingsUrlOperation, ThingsWriteError},
 };
 use axum::{
     body::{Body, to_bytes},
@@ -233,7 +233,10 @@ async fn create_task_from_audio_accepts_task_from_transcript() {
     let state = AppState::with_write_services(
         ThingsRepository::new(pool),
         Arc::new(FakeWhisperTranscriber::text(" Clean coffee\nmachine ")),
-        Arc::new(FakeThingsTaskCreator::success(Arc::clone(&things_titles))),
+        Arc::new(FakeThingsTaskWriter::success(
+            Arc::clone(&things_titles),
+            Arc::new(Mutex::new(Vec::new())),
+        )),
     );
 
     let response = crate::app::router(state)
@@ -257,7 +260,10 @@ async fn create_task_from_audio_accepts_task_from_transcript() {
 async fn create_task_from_audio_rejects_missing_file() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::text("unused"),
-        FakeThingsTaskCreator::success(Arc::new(Mutex::new(Vec::new()))),
+        FakeThingsTaskWriter::success(
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        ),
     )
     .await;
 
@@ -279,7 +285,10 @@ async fn create_task_from_audio_rejects_missing_file() {
 async fn create_task_from_audio_rejects_empty_transcript() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::text(" \n\t "),
-        FakeThingsTaskCreator::success(Arc::new(Mutex::new(Vec::new()))),
+        FakeThingsTaskWriter::success(
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        ),
     )
     .await;
 
@@ -295,7 +304,10 @@ async fn create_task_from_audio_rejects_empty_transcript() {
 async fn create_task_from_audio_maps_whisper_failure_to_bad_gateway() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::failure(),
-        FakeThingsTaskCreator::success(Arc::new(Mutex::new(Vec::new()))),
+        FakeThingsTaskWriter::success(
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        ),
     )
     .await;
 
@@ -311,12 +323,112 @@ async fn create_task_from_audio_maps_whisper_failure_to_bad_gateway() {
 async fn create_task_from_audio_maps_things_launch_failure_to_server_error() {
     let state = state_with_audio_fakes(
         FakeWhisperTranscriber::text("Clean coffee machine"),
-        FakeThingsTaskCreator::launch_failure(),
+        FakeThingsTaskWriter::add_failure(),
     )
     .await;
 
     let response = crate::app::router(state)
         .oneshot(multipart_request(b"wav"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn update_task_accepts_status_changes_and_echoes_requested_fields() {
+    let updates = Arc::new(Mutex::new(Vec::new()));
+    let state = AppState::with_write_services(
+        ThingsRepository::new(fixture_pool().await),
+        Arc::new(FakeWhisperTranscriber::text("unused")),
+        Arc::new(FakeThingsTaskWriter::success(
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&updates),
+        )),
+    );
+
+    let response = crate::app::router(state)
+        .oneshot(json_request(
+            "PATCH",
+            "/tasks/route-task",
+            r#"{"completed":true,"canceled":false}"#,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["id"], "route-task");
+    assert_eq!(json["attributes"]["completed"], true);
+    assert_eq!(json["attributes"]["canceled"], false);
+    assert_eq!(
+        updates.lock().unwrap().as_slice(),
+        [StatusUpdateCall {
+            id: "route-task".to_string(),
+            completed: Some(true),
+            canceled: Some(false),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn update_task_rejects_empty_status_payload() {
+    let state = AppState::with_write_services(
+        ThingsRepository::new(fixture_pool().await),
+        Arc::new(FakeWhisperTranscriber::text("unused")),
+        Arc::new(FakeThingsTaskWriter::success(
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        )),
+    );
+
+    let response = crate::app::router(state)
+        .oneshot(json_request("PATCH", "/tasks/route-task", r#"{}"#))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn update_task_maps_missing_auth_token_to_server_error() {
+    let state = AppState::with_write_services(
+        ThingsRepository::new(fixture_pool().await),
+        Arc::new(FakeWhisperTranscriber::text("unused")),
+        Arc::new(FakeThingsTaskWriter::missing_update_token()),
+    );
+
+    let response = crate::app::router(state)
+        .oneshot(json_request(
+            "PATCH",
+            "/tasks/route-task",
+            r#"{"completed":false}"#,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "Things update auth token is not configured");
+}
+
+#[tokio::test]
+async fn update_task_maps_things_launch_failure_to_server_error() {
+    let state = AppState::with_write_services(
+        ThingsRepository::new(fixture_pool().await),
+        Arc::new(FakeWhisperTranscriber::text("unused")),
+        Arc::new(FakeThingsTaskWriter::update_failure()),
+    );
+
+    let response = crate::app::router(state)
+        .oneshot(json_request(
+            "PATCH",
+            "/tasks/route-task",
+            r#"{"canceled":true}"#,
+        ))
         .await
         .unwrap();
 
@@ -381,7 +493,7 @@ fn task_ids(tasks: &[ThingsTask]) -> Vec<&str> {
 
 async fn state_with_audio_fakes(
     whisper: FakeWhisperTranscriber,
-    things: FakeThingsTaskCreator,
+    things: FakeThingsTaskWriter,
 ) -> AppState {
     AppState::with_write_services(
         ThingsRepository::new(fixture_pool().await),
@@ -406,6 +518,15 @@ fn multipart_request(file: &[u8]) -> Request<Body> {
             "multipart/form-data; boundary=BOUNDARY",
         )
         .body(Body::from(body))
+        .unwrap()
+}
+
+fn json_request(method: &str, uri: &str, body: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
         .unwrap()
 }
 
@@ -447,42 +568,110 @@ impl WhisperTranscriber for FakeWhisperTranscriber {
     }
 }
 
-struct FakeThingsTaskCreator {
-    response: FakeThingsResponse,
-    titles: Arc<Mutex<Vec<String>>>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StatusUpdateCall {
+    id: String,
+    completed: Option<bool>,
+    canceled: Option<bool>,
 }
 
-impl FakeThingsTaskCreator {
-    fn success(titles: Arc<Mutex<Vec<String>>>) -> Self {
+struct FakeThingsTaskWriter {
+    add_response: FakeThingsResponse,
+    update_response: FakeThingsResponse,
+    titles: Arc<Mutex<Vec<String>>>,
+    updates: Arc<Mutex<Vec<StatusUpdateCall>>>,
+}
+
+impl FakeThingsTaskWriter {
+    fn success(
+        titles: Arc<Mutex<Vec<String>>>,
+        updates: Arc<Mutex<Vec<StatusUpdateCall>>>,
+    ) -> Self {
         Self {
-            response: FakeThingsResponse::Success,
+            add_response: FakeThingsResponse::Success,
+            update_response: FakeThingsResponse::Success,
             titles,
+            updates,
         }
     }
 
-    fn launch_failure() -> Self {
+    fn add_failure() -> Self {
         Self {
-            response: FakeThingsResponse::LaunchFailure,
+            add_response: FakeThingsResponse::LaunchFailure(ThingsUrlOperation::Add),
+            update_response: FakeThingsResponse::Success,
             titles: Arc::new(Mutex::new(Vec::new())),
+            updates: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn update_failure() -> Self {
+        Self {
+            add_response: FakeThingsResponse::Success,
+            update_response: FakeThingsResponse::LaunchFailure(ThingsUrlOperation::Update),
+            titles: Arc::new(Mutex::new(Vec::new())),
+            updates: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn missing_update_token() -> Self {
+        Self {
+            add_response: FakeThingsResponse::Success,
+            update_response: FakeThingsResponse::MissingUpdateAuthToken,
+            titles: Arc::new(Mutex::new(Vec::new())),
+            updates: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
 
 enum FakeThingsResponse {
     Success,
-    LaunchFailure,
+    LaunchFailure(ThingsUrlOperation),
+    MissingUpdateAuthToken,
 }
 
-impl ThingsTaskCreator for FakeThingsTaskCreator {
+impl ThingsTaskWriter for FakeThingsTaskWriter {
     fn create_inbox_task<'a>(
         &'a self,
         title: String,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ThingsAddError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThingsWriteError>> + Send + 'a>> {
         Box::pin(async move {
             self.titles.lock().unwrap().push(title);
-            match self.response {
+            match self.add_response {
                 FakeThingsResponse::Success => Ok(()),
-                FakeThingsResponse::LaunchFailure => Err(ThingsAddError::LaunchStatus(Some(1))),
+                FakeThingsResponse::LaunchFailure(operation) => {
+                    Err(ThingsWriteError::LaunchStatus {
+                        operation,
+                        code: Some(1),
+                    })
+                }
+                FakeThingsResponse::MissingUpdateAuthToken => Ok(()),
+            }
+        })
+    }
+
+    fn update_task_status<'a>(
+        &'a self,
+        id: String,
+        completed: Option<bool>,
+        canceled: Option<bool>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThingsWriteError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.updates.lock().unwrap().push(StatusUpdateCall {
+                id,
+                completed,
+                canceled,
+            });
+            match self.update_response {
+                FakeThingsResponse::Success => Ok(()),
+                FakeThingsResponse::LaunchFailure(operation) => {
+                    Err(ThingsWriteError::LaunchStatus {
+                        operation,
+                        code: Some(1),
+                    })
+                }
+                FakeThingsResponse::MissingUpdateAuthToken => {
+                    Err(ThingsWriteError::MissingUpdateAuthToken)
+                }
             }
         })
     }

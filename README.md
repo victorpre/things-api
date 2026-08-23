@@ -19,6 +19,7 @@ THINGS_DB_PATH="/Users/you/Library/Group Containers/JLMPQHK86H.com.culturedcode.
 THINGS_API_HOST="127.0.0.1"
 THINGS_API_PORT="3000"
 WHISPER_INFERENCE_URL="http://127.0.0.1:8080/inference"
+THINGS_AUTH_TOKEN="your-things-auth-token"
 ```
 
 Cultured Code documents the Things database location here:
@@ -41,6 +42,9 @@ curl http://127.0.0.1:3000/health
 curl http://127.0.0.1:3000/tasks
 curl http://127.0.0.1:3000/tasks/lists
 curl http://127.0.0.1:3000/tasks/today
+curl -X PATCH http://127.0.0.1:3000/tasks/TASK_ID \
+  -H "Content-Type: application/json" \
+  -d '{"completed":true}'
 curl -X POST http://127.0.0.1:3000/tasks/from-audio \
   -F file="@/path/to/todo.wav"
 ```
@@ -73,6 +77,36 @@ curl "http://127.0.0.1:3000/tasks/lists?selected=inbox"
 
 Supported list ids are `inbox` and `today`. Inbox mirrors Things' Inbox query: open, untrashed, unscheduled, non-repeating todos without a project. Today matches `GET /tasks/today`.
 
+`PATCH /tasks/:id` updates an existing to-do through `things:///update` and returns `202 Accepted` after macOS accepts the URL launch:
+
+```json
+{
+  "id": "TASK_ID",
+  "attributes": {
+    "completed": true
+  }
+}
+```
+
+The request body may include `completed`, `canceled`, or both. At least one is required:
+
+```sh
+curl -X PATCH "http://127.0.0.1:3000/tasks/TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"completed":true}'
+
+curl -X PATCH "http://127.0.0.1:3000/tasks/TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"completed":false}'
+
+curl -X PATCH "http://127.0.0.1:3000/tasks/TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"canceled":true}'
+```
+
+This endpoint requires `THINGS_AUTH_TOKEN` to be configured. Generate the token from Things' URL scheme settings documented here:
+https://culturedcode.com/things/support/articles/2803573/
+
 `POST /tasks/from-audio` accepts multipart field `file`, forwards the WAV upload to whisper.cpp, normalizes the returned transcript, creates an Inbox task through `things:///add`, and returns `202 Accepted` after macOS accepts the URL launch:
 
 ```json
@@ -98,6 +132,9 @@ curl "http://127.0.0.1:3000/tasks?status=open"
 curl "http://127.0.0.1:3000/tasks?include_trashed=true"
 curl "http://127.0.0.1:3000/tasks/lists?selected=today,inbox"
 curl "http://127.0.0.1:3000/tasks/today"
+curl -X PATCH "http://127.0.0.1:3000/tasks/TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"canceled":true}'
 curl -X POST "http://127.0.0.1:3000/tasks/from-audio" \
   -F file="@/path/to/todo.wav"
 ```
